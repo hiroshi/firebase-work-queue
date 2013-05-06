@@ -9,46 +9,30 @@
  * @param processingCallback The callback to be called for each work item
  */
 function WorkQueue(queueRef, processingCallback) {
-  this.processingCallback = processingCallback;
-  this.busy = false;
-  queueRef.startAt().limit(1).on("child_added", function(snap) {
-    this.currentItem = snap.ref();
-    this.tryToProcess();
-  }, this);
-}
-
-WorkQueue.prototype.readyToProcess = function() {
-  this.busy = false;
-  this.tryToProcess();
-}
-
-WorkQueue.prototype.tryToProcess = function() {
-  if(!this.busy && this.currentItem) {
-    this.busy = true;
-    var dataToProcess = null;
-    var self = this;
-    var toProcess = this.currentItem;
-    this.currentItem = null;
-    toProcess.transaction(function(theItem) {
-      dataToProcess = theItem;
-      if(theItem) {
-        return null;
-      } else {
-        return;
-      }
-    }, function(error, committed, snapshot, dummy) {
-       if (error) throw error;
-       if(committed) {
-         console.log("Claimed a job.");
-	 self.processingCallback(dataToProcess, function() {
-	   self.readyToProcess();
-	 });
-       } else {
-         console.log("Another worker beat me to the job.");
-	 self.readyToProcess();
-       }
-    });
-  }
+    this.processingCallback = processingCallback;
+    this.queue = queueRef.startAt().limit(1);
+    this.callback = function(addedSnap) {
+        var self = this;
+        addedSnap.ref().transaction(function(val) {
+            if (!val.started) {
+                val.started = true;
+                return val;
+            }
+        }, function(error, committed, snap) {
+            if (error) throw error;
+            if(committed) {
+                console.log("Claimed a job.");
+                self.queue.off("child_added", self.callback, self);
+                snap.ref().remove();
+                self.processingCallback(snap.val(), function() {
+                    self.queue.on("child_added", self.callback, self);
+                });
+            } else {
+                console.log("Another worker beat me to the job.");
+            }
+        });
+    };
+    this.queue.on("child_added", this.callback, this);
 }
 
 module.exports = WorkQueue;
